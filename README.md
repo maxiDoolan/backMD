@@ -1,48 +1,139 @@
-Pre-entrega 1:MAXIMILIANO DOOLAN 
+# BackMD — API REST para plataforma de eventos
 
-app.js configura Express (con express.json()); server.js levanta el servidor
-Puerto configurable por variable de entorno
-GET /api/health devuelve respuesta indicando que el servidor está activo
-Estructura de carpetas (deben existir, aunque algunas estén vacías)
+## Instalación
 
-config/, routes/, controllers/, services/, repositories/, dao/, models/, middlewares/, utils/
-Recursos
+```bash
+npm install
+```
 
-GET /api/events con ruta y controlador propios (puede devolver lista vacía)
-Estructura inicial para sessions (ruta y controlador, sin lógica de auth)
-Modelos
+Crear un archivo `.env` en la raíz del proyecto basándose en `.env.example`:
 
-Archivo base para User (campos mínimos)
-Archivo base para Event (campos mínimos)
-Configuración y documentación
+```bash
+cp .env.example .env
+```
 
-dotenv configurado; .env.example con PORT, NODE_ENV, MONGO_URL, JWT_SECRET
-.gitignore que excluya .env y node_modules
-README.md con: nombre del proyecto, temática elegida, tecnologías, instalación, configuración de variables, cómo ejecutar, estructura de carpetas, rutas disponibles
-Módulos ESM (import/export)
+Completar las variables en `.env` y luego correr:
 
-1. Estructura de carpetas esperada:
+```bash
+npm run dev
+```
 
+---
 
+## Endpoint: `POST /api/sessions/register`
 
-proyecto-eventos/
-├── src/
-│   ├── app.js                # configura Express (NO levanta el server)
-│   ├── server.js             # levanta el servidor
-│   ├── config/
-│   ├── routes/
-│   │   ├── events.router.js
-│   │   └── sessions.router.js
-│   ├── controllers/
-│   ├── services/
-│   ├── repositories/
-│   ├── dao/
-│   ├── models/
-│   │   ├── User.js           # campos mínimos
-│   │   └── Event.js          # campos mínimos
-│   ├── middlewares/
-│   └── utils/
-├── .env.example              # PORT, NODE_ENV, MONGO_URL, JWT_SECRET
-├── .gitignore                # excluye .env y node_modules
-├── package.json
-└── README.md
+Registra un nuevo usuario. Hashea la contraseña con bcrypt antes de guardar. **No devuelve la contraseña en la respuesta.**
+
+### Campos esperados (JSON body)
+
+| Campo        | Tipo   | Requerido | Descripción                        |
+|--------------|--------|-----------|------------------------------------|
+| `first_name` | String | ✅        | Nombre del usuario                 |
+| `last_name`  | String | ✅        | Apellido del usuario               |
+| `email`      | String | ✅        | Email válido (se normaliza automáticamente) |
+| `password`   | String | ✅        | Mínimo 6 caracteres                |
+
+> El campo `role` **no se acepta desde el body**. Siempre se asigna `"user"` al registrarse.
+
+---
+
+## Casos de prueba (con Postman o Thunder Client)
+
+### 1. Registro exitoso
+
+**Request:**
+```json
+POST /api/sessions/register
+{
+  "first_name": "Ana",
+  "last_name": "Pérez",
+  "email": "Ana@Mail.com ",
+  "password": "Secreta123"
+}
+```
+
+**Response `201`:**
+```json
+{
+  "status": "success",
+  "payload": {
+    "id": "665f2a...",
+    "first_name": "Ana",
+    "last_name": "Pérez",
+    "email": "ana@mail.com",
+    "role": "user"
+  }
+}
+```
+
+---
+
+### 2. Campos faltantes
+
+**Request:**
+```json
+{ "first_name": "Ana", "email": "ana@mail.com" }
+```
+
+**Response `400`:**
+```json
+{ "status": "error", "message": "Faltan campos obligatorios" }
+```
+
+---
+
+### 3. Email con formato inválido
+
+**Request:**
+```json
+{ "first_name": "Ana", "last_name": "Pérez", "email": "no-es-un-email", "password": "123456" }
+```
+
+**Response `400`:**
+```json
+{ "status": "error", "message": "Formato de email inválido" }
+```
+
+---
+
+### 4. Email ya registrado
+
+**Request:** (mismo email del caso 1, segundo intento)
+```json
+{ "first_name": "Ana", "last_name": "Pérez", "email": "ana@mail.com", "password": "Secreta123" }
+```
+
+**Response `409`:**
+```json
+{ "status": "error", "message": "El email ya está registrado" }
+```
+
+---
+
+### 5. Contraseña no está en texto plano (verificar en MongoDB)
+
+En MongoDB Compass o Atlas, buscar el usuario guardado. El campo `password` debe verse similar a:
+```
+$2b$10$Kx8Z...  ← hash de bcrypt, nunca el texto original
+```
+
+---
+
+### 6. La respuesta no devuelve la contraseña
+
+Verificar en cualquier respuesta `201` que el objeto `payload` **no tenga** el campo `password`.
+
+---
+
+## Arquitectura en capas
+
+```
+ruta (router) → controller → service → repository → DAO → modelo (MongoDB)
+```
+
+- **router**: define la ruta y delega al controller
+- **controller**: maneja HTTP (status codes, formato de respuesta)
+- **service**: lógica de negocio (validación, normalización, hash)
+- **repository**: abstracción del acceso a datos, decide qué devolver
+- **DAO**: única capa que habla directamente con Mongoose
+- **utils/hash.js**: helper reutilizable de bcrypt
