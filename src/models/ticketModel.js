@@ -1,13 +1,8 @@
-import {schema, model} from "mongoose";
+import { Schema, model } from "mongoose";
 
-const ticketSchema = new schema({
-    user:{
-        type: schema.Types.ObjectId,
-        ref: "Users",
-    },
-    event:{
-        type: schema.Types.ObjectId,
-        ref: "Events",},
+const ticketSchema = new Schema({
+    user:  { type: Schema.Types.ObjectId, ref: "Users" },
+    event: { type: Schema.Types.ObjectId, ref: "Events" },
 });
 
 export const ticketModel = model("Tickets", ticketSchema);

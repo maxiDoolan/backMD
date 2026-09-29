@@ -1,17 +1,5 @@
-export async function getAll(req, res, next) {
-try {
-    
-} catch (error) {
-    
-}
-}
-export async function getAllById(req, res, next) {
-try {
-    
-} catch (error) {
-    
-}
-}
-export async function purchaseTicket(req,res,next) {
+import { notImplemented } from "./notImplemented.js";
 
-}
+export const getAll = notImplemented;
+export const getAllById = notImplemented;
+export const purchaseTicket = notImplemented;

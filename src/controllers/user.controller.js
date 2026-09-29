@@ -1,3 +1,5 @@
-export async function getAll(req, res, next) {}
-export async function getAllByEmail(req, res, next) {}
-export async function updateEmail(req, res, next) {}
+import { notImplemented } from "./notImplemented.js";
+
+export const getAll = notImplemented;
+export const getAllByEmail = notImplemented;
+export const updateEmail = notImplemented;
