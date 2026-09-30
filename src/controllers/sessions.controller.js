@@ -1,41 +1,25 @@
-import { registerUser, loginUser } from "../services/sessions.service.js";
 import { generateToken } from "../utils/jwt.js";
 import { AUTH_COOKIE, authCookieOptions, clearAuthCookieOptions } from "../config/cookie.js";
 
-// Traduce errores conocidos (HttpError) a su status; el resto es 500
-function handleError(res, error) {
-    if (error.status) {
-        return res.status(error.status).json({ status: "error", message: error.message });
-    }
-    console.error(error);
-    return res.status(500).json({ status: "error", message: "Error interno del servidor" });
+// req.user lo deja la estrategia "register" (usuario creado, sin password)
+export function registerController(req, res) {
+    res.status(201).json({ status: "success", payload: req.user });
 }
 
-export async function registerController(req, res) {
-    try {
-        const user = await registerUser(req.body ?? {});
-        res.status(201).json({ status: "success", payload: user });
-    } catch (error) {
-        handleError(res, error);
-    }
+// req.user lo deja la estrategia "login": { id, email, role }
+// El controller (no la estrategia) genera el JWT y setea la cookie
+export function loginController(req, res) {
+    const token = generateToken(req.user);
+    res.cookie(AUTH_COOKIE, token, authCookieOptions);
+    res.status(200).json({ status: "success", message: "Login correcto" });
 }
 
-export async function loginController(req, res) {
-    try {
-        const user = await loginUser(req.body ?? {});
-        const token = generateToken(user);
-        res.cookie(AUTH_COOKIE, token, authCookieOptions);
-        res.status(200).json({ status: "success", message: "Login correcto" });
-    } catch (error) {
-        handleError(res, error);
-    }
-}
-
+// req.user lo deja la estrategia "current": { id, email, role }
 export function currentController(req, res) {
-    // req.user lo carga el middleware auth: { id, email, role }
     res.status(200).json({ status: "success", payload: req.user });
 }
 
+// No pasa por Passport: solo borra la cookie
 export function logoutController(req, res) {
     res.clearCookie(AUTH_COOKIE, clearAuthCookieOptions);
     res.status(200).json({ status: "success", message: "Sesión cerrada" });

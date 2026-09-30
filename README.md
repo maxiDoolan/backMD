@@ -1,6 +1,6 @@
 # BackMD — API REST para plataforma de eventos
 
-Backend con **Node.js, Express, MongoDB (Mongoose)** y autenticación con **JWT guardado en una cookie HttpOnly**.
+Backend con **Node.js, Express, MongoDB (Mongoose)** y autenticación centralizada con **Passport.js**, usando **JWT guardado en una cookie HttpOnly**.
 
 ## Instalación
 
@@ -21,6 +21,36 @@ npm run dev            # o: npm start
 | `NODE_ENV`       | `development` o `production` (activa `secure` en cookie)| `development`                   |
 
 > El archivo `.env` **no** se sube al repositorio (está en `.gitignore`).
+
+---
+
+## Autenticación con Passport.js
+
+Toda la autenticación pasa por estrategias de Passport definidas en **`src/config/passport.config.js`**. `app.js` solo ejecuta `initializePassport()` y `passport.initialize()`; no contiene lógica de estrategias. No se usan sesiones de Passport (`session: false`): el estado vive en el JWT.
+
+| Estrategia | Tipo                      | Usada en                      | Qué hace |
+|------------|---------------------------|-------------------------------|----------|
+| `register` | `passport-local`          | `POST /api/sessions/register` | Valida campos, normaliza el email, verifica unicidad, hashea la contraseña con bcrypt y crea el usuario con `role: "user"`. |
+| `login`    | `passport-local`          | `POST /api/sessions/login`    | Busca el usuario y compara la contraseña con bcrypt. Si falla, responde siempre `Credenciales inválidas`. |
+| `current`  | `passport-jwt`            | `GET /api/sessions/current`   | Lee el JWT de la cookie `currentUser`, verifica firma y expiración y deja `{ id, email, role }` en `req.user`. |
+
+- Las rutas delegan en Passport mediante `passportCall(estrategia)` (`src/middlewares/passport.middleware.js`), un wrapper de `passport.authenticate(estrategia, { session: false }, callback)` que responde los errores en JSON.
+- **El JWT lo genera el controller de login, no la estrategia**: la estrategia solo valida credenciales y el controller firma el token y setea la cookie.
+- `POST /api/sessions/logout` no pasa por Passport: solo borra la cookie.
+
+### Preparado para providers externos
+
+`passport.config.js` registra las estrategias desde un único objeto `strategies`. Para sumar Google, GitHub u otro provider alcanza con instalar su estrategia (por ejemplo `passport-google-oauth20`), crearla en ese archivo y agregarla al objeto. **No hace falta tocar `app.js`.**
+
+```js
+const strategies = {
+    register: registerStrategy,
+    login: loginStrategy,
+    current: currentStrategy,
+    // google: new GoogleStrategy({ ... }, verify),
+    // github: new GitHubStrategy({ ... }, verify),
+};
+```
 
 ---
 
@@ -49,7 +79,7 @@ Rutas en desarrollo (responden `501 Endpoint no implementado todavía`): `/api/e
 
 ### `POST /api/sessions/register`
 
-Valida campos, normaliza el email (trim + minúsculas), rechaza duplicados y guarda la contraseña hasheada con bcrypt. El `role` no se acepta desde el body: siempre es `"user"`.
+Estrategia `register`. Valida campos, normaliza el email (trim + minúsculas), rechaza duplicados y guarda la contraseña hasheada con bcrypt. El `role` no se acepta desde el body: siempre es `"user"`.
 
 **Request:**
 ```json
@@ -77,7 +107,7 @@ Valida campos, normaliza el email (trim + minúsculas), rechaza duplicados y gua
 
 ### `POST /api/sessions/login`
 
-Busca el usuario por email y compara la contraseña con bcrypt. Si es correcta, genera un JWT con payload `{ id, email, role }` firmado con `JWT_SECRET` y lo guarda en la cookie `currentUser` (`httpOnly: true`, `sameSite: 'lax'`, `maxAge: 3600000`, `secure` solo en producción).
+Estrategia `login`: busca el usuario por email y compara la contraseña con bcrypt. Si es correcta, el **controller** genera un JWT con payload `{ id, email, role }` firmado con `JWT_SECRET` y lo guarda en la cookie `currentUser` (`httpOnly: true`, `sameSite: 'lax'`, `maxAge: 3600000`, `secure` solo en producción).
 
 **Request:**
 ```json
@@ -103,7 +133,7 @@ Busca el usuario por email y compara la contraseña con bcrypt. Si es correcta, 
 
 ### `GET /api/sessions/current`
 
-El middleware `auth` lee la cookie `currentUser`, verifica el JWT y guarda el payload en `req.user`.
+Protegida con la estrategia `current` de Passport: lee la cookie `currentUser`, verifica el JWT y guarda `{ id, email, role }` en `req.user`.
 
 **Response `200`** (con la cookie):
 ```json
@@ -129,10 +159,9 @@ El middleware `auth` lee la cookie `currentUser`, verifica el JWT y guarda el pa
 ## Casos de prueba
 
 1. Registro → login → `/current` (200) → logout → `/current` (401)
-2. Login con email inexistente → 401 `Credenciales inválidas`
-3. Login con contraseña incorrecta → 401 `Credenciales inválidas`
-4. `/current` sin cookie → 401 `No autenticado`
-5. `/current` con token manipulado o expirado → 401 `No autenticado`
+2. Registro con email duplicado → 409 `El email ya está registrado`
+3. Login con credenciales inválidas (email inexistente o contraseña incorrecta) → 401 `Credenciales inválidas`
+4. `/current` sin cookie o con token manipulado/expirado → 401 `No autenticado`
 
 > En Postman / Thunder Client las cookies se guardan automáticamente después del login, así que `/current` funciona sin configurar nada extra.
 
@@ -142,23 +171,24 @@ El middleware `auth` lee la cookie `currentUser`, verifica el JWT y guarda el pa
 
 ```
 src/
-├── app.js                      # configuración de Express (sin lógica de auth)
-├── server.js                   # conecta a MongoDB y levanta el servidor
+├── app.js                            # Express + passport.initialize() (sin lógica de auth)
+├── server.js                         # conecta a MongoDB y levanta el servidor
 ├── config/
-│   ├── env.js                  # lee y valida variables de entorno
-│   ├── db.js                   # conexión a MongoDB
-│   └── cookie.js               # nombre y opciones de la cookie de auth
-├── models/userModel.js
-├── routes/sessions.router.js
-├── controllers/sessions.controller.js
-├── services/sessions.service.js      # validaciones y lógica de negocio
+│   ├── env.js                        # lee y valida variables de entorno
+│   ├── db.js                         # conexión a MongoDB
+│   ├── cookie.js                     # nombre y opciones de la cookie de auth
+│   └── passport.config.js            # estrategias register, login y current
+├── routes/sessions.router.js         # rutas que delegan en Passport
+├── controllers/sessions.controller.js  # genera el JWT y setea/borra la cookie
+├── middlewares/
+│   ├── passport.middleware.js        # passportCall: authenticate sin sesión + errores JSON
+│   └── error.middleware.js           # manejador global de errores
 ├── repositories/users.repository.js  # decide qué datos devolver (sin password)
 ├── dao/users.dao.js                  # acceso directo a Mongoose
-├── middlewares/auth.middleware.js    # verifica el JWT de la cookie
+├── models/userModel.js
 └── utils/
-    ├── jwt.js                  # firmar / verificar JWT
-    ├── hash.js                 # bcrypt
-    └── errors.js               # HttpError (error con status)
+    ├── jwt.js                        # firma del JWT
+    └── hash.js                       # bcrypt
 ```
 
-Flujo: `router → controller → service → repository → DAO → modelo`.
+Flujo: `router → passportCall(estrategia) → controller`, y las estrategias usan `repository → DAO → modelo`.
