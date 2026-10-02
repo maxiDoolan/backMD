@@ -5,6 +5,7 @@ import { UsersRepository } from "../repositories/users.repository.js";
 import { hashPassword, comparePassword } from "../utils/hash.js";
 import { AUTH_COOKIE } from "./cookie.js";
 import { env } from "./env.js";
+import { ROLES } from "./roles.js";
 
 const usersRepository = new UsersRepository();
 
@@ -51,7 +52,7 @@ const registerStrategy = new LocalStrategy(
                 last_name: last_name.trim(),
                 email: normalizedEmail,
                 password: await hashPassword(password),
-                role: "user",
+                role: ROLES.USER,
             });
 
             return done(null, newUser); // ya viene sin password desde el repository

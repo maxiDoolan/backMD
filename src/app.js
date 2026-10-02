@@ -6,7 +6,7 @@ import { errorHandler } from "./middlewares/error.middleware.js";
 import rootRouter from "./routes/root.router.js";
 import userRouter from "./routes/user.router.js";
 import ticketRouter from "./routes/ticket.router.js";
-import eventRouter from "./routes/event.router.js";
+import eventRouter from "./routes/events.router.js";
 import sessionsRouter from "./routes/sessions.router.js";
 
 const app = express();
