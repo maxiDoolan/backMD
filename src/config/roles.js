@@ -14,5 +14,7 @@ export const PERMISSIONS = Object.freeze({
     MANAGE_EVENT:    [ROLES.ORGANIZER, ROLES.ADMIN],             // modificar/cambiar estado (organizer: solo propios)
     MANAGE_ANY_EVENT:[ROLES.ADMIN],                              // modificar cualquier evento
     VIEW_USERS:      [ROLES.ADMIN],
-    BUY_TICKET:      [ROLES.USER, ROLES.ORGANIZER, ROLES.ADMIN], // no en eventos propios
+    ENROLL:          [ROLES.USER, ROLES.ORGANIZER, ROLES.ADMIN], // inscribirse (no a eventos propios)
+    VIEW_EVENT_TICKETS:[ROLES.ORGANIZER, ROLES.ADMIN],            // inscriptos (organizer: solo sus eventos)
+    CANCEL_ANY_TICKET:[ROLES.ADMIN],                             // cancelar tickets ajenos
 });

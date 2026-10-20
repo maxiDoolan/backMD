@@ -218,12 +218,3 @@ export async function changeEventStatus(id, newStatus) {
     }
     return eventsRepository.update(id, { status: newStatus });
 }
-
-// Usado por tickets: el evento debe existir y estar publicado
-export async function getPurchasableEvent(id) {
-    const event = await findEventOrFail(id);
-    if (event.status !== EVENT_STATUS.PUBLISHED) {
-        throw new HttpError(409, "Solo se pueden comprar tickets de eventos publicados");
-    }
-    return event;
-}

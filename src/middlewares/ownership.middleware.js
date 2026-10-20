@@ -1,17 +1,18 @@
 import { isValidObjectId } from "mongoose";
 import { EventsRepository } from "../repositories/events.repository.js";
+import { TicketsRepository } from "../repositories/tickets.repository.js";
 import { PERMISSIONS } from "../config/roles.js";
-import { getPurchasableEvent } from "../services/events.service.js";
 
 const eventsRepository = new EventsRepository();
+const ticketsRepository = new TicketsRepository();
 
-const isOwner = (event, user) => String(event.organizer) === String(user.id);
+const sameId = (a, b) => String(a?.id ?? a) === String(b);
 
-// Propiedad del recurso: admin puede modificar cualquier evento; organizer solo los propios.
-// 400 si el ID es inválido, 404 si no existe, 403 si es ajeno.
+// Propiedad de eventos: admin puede cualquiera; organizer solo los propios.
+// Sirve para /:id y para /:eid. 400 ID inválido, 404 no existe, 403 ajeno.
 export async function eventOwnership(req, res, next) {
     try {
-        const { id } = req.params;
+        const id = req.params.id ?? req.params.eid;
         if (!isValidObjectId(id)) {
             return res.status(400).json({ status: "error", message: "ID de evento inválido" });
         }
@@ -21,8 +22,8 @@ export async function eventOwnership(req, res, next) {
         }
 
         const canManageAny = PERMISSIONS.MANAGE_ANY_EVENT.includes(req.user.role);
-        if (!canManageAny && !isOwner(event, req.user)) {
-            return res.status(403).json({ status: "error", message: "Solo podés modificar tus propios eventos" });
+        if (!canManageAny && !sameId(event.organizer, req.user.id)) {
+            return res.status(403).json({ status: "error", message: "Solo podés gestionar tus propios eventos" });
         }
         next();
     } catch (error) {
@@ -30,12 +31,21 @@ export async function eventOwnership(req, res, next) {
     }
 }
 
-// Comprar ticket: el evento debe estar publicado (regla del service) y no ser propio (403)
-export async function ticketPermission(req, res, next) {
+// Propiedad de tickets: el dueño del ticket o un admin. 400 / 404 / 403.
+export async function ticketOwnership(req, res, next) {
     try {
-        const event = await getPurchasableEvent(req.params.eid);
-        if (isOwner(event, req.user)) {
-            return res.status(403).json({ status: "error", message: "No podés comprar un ticket de tu propio evento" });
+        const { tid } = req.params;
+        if (!isValidObjectId(tid)) {
+            return res.status(400).json({ status: "error", message: "ID de ticket inválido" });
+        }
+        const ticket = await ticketsRepository.findById(tid);
+        if (!ticket) {
+            return res.status(404).json({ status: "error", message: "Ticket no encontrado" });
+        }
+
+        const canManageAny = PERMISSIONS.CANCEL_ANY_TICKET.includes(req.user.role);
+        if (!canManageAny && !sameId(ticket.user, req.user.id)) {
+            return res.status(403).json({ status: "error", message: "Solo podés cancelar tus propios tickets" });
         }
         next();
     } catch (error) {

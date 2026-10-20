@@ -1,19 +1,17 @@
 import { Router } from "express";
-import { getAll, getAllById, purchaseTicket } from "../controllers/ticket.controller.js";
+import { getMyTickets, cancelTicket } from "../controllers/ticket.controller.js";
 import { auth } from "../middlewares/auth.middleware.js";
-import { authorize } from "../middlewares/authorize.middleware.js";
-import { ticketPermission } from "../middlewares/ownership.middleware.js";
-import { PERMISSIONS } from "../config/roles.js";
+import { ticketOwnership } from "../middlewares/ownership.middleware.js";
 
 const router = Router();
 
+// Todas requieren sesión
 router.use(auth);
 
-// Pendientes
-router.get("/", getAll);
-router.get("/:tid", getAllById);
+// Mis tickets (solo los del usuario logueado)
+router.get("/my-tickets", getMyTickets);
 
-// Comprar: todos los roles, pero no en un evento propio
-router.post("/:uid/:eid", authorize(PERMISSIONS.BUY_TICKET), ticketPermission, purchaseTicket);
+// Cancelar: dueño del ticket o admin
+router.patch("/:tid/cancel", ticketOwnership, cancelTicket);
 
 export default router;
