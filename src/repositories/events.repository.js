@@ -1,19 +1,23 @@
 import { EventsDAO } from "../dao/events.dao.js";
-import { EVENT_STATUS } from "../models/eventModel.js";
 
 const dao = new EventsDAO();
 
-const toDTO = ({ _id, __v, ...event }) => ({ id: _id, ...event });
+// Normaliza el documento: _id → id (también en el organizer populado)
+function toDTO({ _id, __v, organizer, ...event }) {
+    const org = organizer && organizer._id
+        ? { id: organizer._id, ...Object.fromEntries(Object.entries(organizer).filter(([k]) => k !== "_id")) }
+        : organizer;
+    return { id: _id, ...event, organizer: org };
+}
 
 export class EventsRepository {
-    // Eventos publicados (no cancelados)
-    async findPublished() {
-        const events = await dao.findAll({ status: EVENT_STATUS.ACTIVE });
-        return events.map(toDTO);
+    async findPaginated(filter, options) {
+        const [events, total] = await Promise.all([dao.findPaginated(filter, options), dao.count(filter)]);
+        return { events: events.map(toDTO), total };
     }
 
-    async findById(id) {
-        const event = await dao.findById(id);
+    async findById(id, options) {
+        const event = await dao.findById(id, options);
         return event ? toDTO(event) : null;
     }
 
@@ -25,9 +29,5 @@ export class EventsRepository {
     async update(id, changes) {
         const updated = await dao.update(id, changes);
         return updated ? toDTO(updated) : null;
-    }
-
-    async cancel(id) {
-        return this.update(id, { status: EVENT_STATUS.CANCELLED });
     }
 }

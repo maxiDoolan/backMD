@@ -1,6 +1,6 @@
 # BackMD — API REST para plataforma de eventos
 
-Backend con **Node.js, Express, MongoDB (Mongoose)**, autenticación centralizada con **Passport.js** (JWT en cookie HttpOnly) y **autorización por roles** (`user`, `organizer`, `admin`).
+Backend con **Node.js, Express, MongoDB (Mongoose)**, autenticación centralizada con **Passport.js** (JWT en cookie HttpOnly), **autorización por roles** (`user`, `organizer`, `admin`) y **CRUD de eventos** con reglas de negocio, filtros, paginación y ordenamiento.
 
 ## Instalación
 
@@ -64,7 +64,7 @@ const strategies = {
 | GET    | `/api/sessions/current`    | Devuelve el usuario autenticado según el JWT            | Sí        |
 | POST   | `/api/sessions/logout`     | Elimina la cookie `currentUser`                         | No        |
 
-Además hay rutas de eventos, usuarios y tickets protegidas por rol (ver **Autorización por roles**). Las que todavía no están desarrolladas responden `501 Endpoint no implementado todavía`.
+Las rutas de **eventos** están en la sección [Eventos](#eventos). Usuarios y tickets se describen en **Roles y autorización**. Las que todavía no están desarrolladas responden `501 Endpoint no implementado todavía`.
 
 ---
 
@@ -162,9 +162,9 @@ Protegida con la estrategia `current` de Passport: lee la cookie `currentUser`, 
 
 | Rol         | Descripción                                                        |
 |-------------|--------------------------------------------------------------------|
-| `user`      | Rol por defecto al registrarse. Consulta eventos y compra tickets. |
-| `organizer` | Crea eventos y modifica/cancela **solo los propios**.              |
-| `admin`     | Modifica cualquier evento y administra usuarios.                   |
+| `user`      | Rol por defecto al registrarse. Consulta eventos y compra tickets.          |
+| `organizer` | Crea eventos y modifica/cambia el estado **solo de los propios**.           |
+| `admin`     | Modifica cualquier evento y administra usuarios.                            |
 
 - El campo `role` del modelo `User` acepta `user`, `organizer` y `admin`, con default `user`.
 - **El registro público no permite elegir rol**: aunque el body traiga `"role": "admin"`, se guarda `user`.
@@ -174,7 +174,8 @@ Protegida con la estrategia `current` de Passport: lee la cookie `currentUser`, 
 
 | Acción                               | user | organizer | admin |
 |--------------------------------------|:----:|:---------:|:-----:|
-| Consultar eventos publicados         |  ✅  |    ✅     |  ✅   |
+| Consultar eventos publicados (público, sin login) |  ✅  |    ✅     |  ✅   |
+| Ver borradores propios               |  ❌  |    ✅     |  ✅ (todos) |
 | Crear eventos                        |  ❌  |    ✅     |  ✅   |
 | Modificar/cancelar eventos propios   |  ❌  |    ✅     |  ✅   |
 | Modificar/cancelar cualquier evento  |  ❌  |    ❌     |  ✅   |
@@ -188,15 +189,16 @@ La matriz está definida en código en **`src/config/roles.js`** (`ROLES` y `PER
 | Middleware | Archivo | Qué hace |
 |------------|---------|----------|
 | `auth` | `src/middlewares/auth.middleware.js` | Lee el JWT de la cookie `currentUser` (estrategia `current` de Passport), lo valida y carga `{ id, email, role }` en `req.user`. Sin sesión válida → **401**. |
+| `optionalAuth` | `src/middlewares/auth.middleware.js` | Para rutas públicas: si hay sesión válida carga `req.user`, si no sigue sin error (así el organizer ve sus borradores). |
 | `authorize(...roles)` | `src/middlewares/authorize.middleware.js` | Recibe los roles permitidos y los compara contra `req.user.role`. Rol no permitido → **403**. |
 | `eventOwnership` | `src/middlewares/ownership.middleware.js` | Propiedad del recurso: `admin` puede modificar cualquier evento; `organizer` solo los que creó. Evento ajeno → **403**. También responde 400 (ID inválido) y 404 (no existe). |
-| `ticketPermission` | `src/middlewares/ownership.middleware.js` | Impide comprar un ticket de un evento que organiza uno mismo → **403**. |
+| `ticketPermission` | `src/middlewares/ownership.middleware.js` | El evento debe estar publicado (409) e impide comprar un ticket de un evento propio → **403**. |
 
 Orden en las rutas: `auth` → `authorize(...)` → (propiedad) → controller.
 
 ```js
 router.post("/", auth, authorize(PERMISSIONS.CREATE_EVENT), createEvent);
-router.put("/:eid", auth, authorize(PERMISSIONS.MANAGE_EVENT), eventOwnership, updateEvent);
+router.put("/:id", auth, authorize(PERMISSIONS.MANAGE_EVENT), eventOwnership, updateEvent);
 ```
 
 ### 401 vs 403
@@ -213,67 +215,13 @@ Ninguno de estos casos responde 500.
 | Método | Ruta                       | Acceso                                          | Errores posibles |
 |--------|----------------------------|-------------------------------------------------|------------------|
 | GET    | `/api/sessions/current`    | Autenticado                                     | 401 |
-| GET    | `/api/events`              | Autenticado (devuelve solo eventos publicados)  | 401 |
-| GET    | `/api/events/:eid`         | Autenticado                                     | 401, 404 |
 | POST   | `/api/events`              | `organizer`, `admin`                            | 401, 403, 400 |
-| PUT    | `/api/events/:eid`         | `organizer` (solo propios), `admin` (cualquiera) | 401, 403, 400, 404 |
-| DELETE | `/api/events/:eid`         | `organizer` (solo propios), `admin` (cualquiera) — cancela el evento | 401, 403, 404 |
+| PUT    | `/api/events/:id`          | Dueño del evento o `admin`                      | 401, 403, 400, 404, 409 |
+| PATCH  | `/api/events/:id/status`   | Dueño del evento o `admin`                      | 401, 403, 400, 404, 409 |
 | GET    | `/api/users`               | `admin` (ruta administrativa)                   | 401, 403 |
-| POST   | `/api/tickets/:uid/:eid`   | Autenticado, excepto en eventos propios         | 401, 403, 404 |
+| POST   | `/api/tickets/:uid/:eid`   | Autenticado, evento publicado y no propio       | 401, 403, 404, 409 |
 
 Rutas pendientes (responden `501`): `GET /api/users/:email`, `PUT /api/users/:email`, `GET /api/tickets`, `GET /api/tickets/:tid`.
-
-### `POST /api/events`
-
-El `organizer` se toma del usuario logueado (`req.user.id`), no del body. Campos: `name`, `date`, `place`, `capacity`, `price`.
-
-**Request (organizer o admin):**
-```json
-{ "name": "Congreso Tech 2026", "date": "2026-12-01", "place": "CABA", "capacity": 100, "price": 5000 }
-```
-
-**Response `201`:**
-```json
-{ "status": "success", "payload": { "id": "6690...", "name": "Congreso Tech 2026", "date": "2026-12-01T00:00:00.000Z", "place": "CABA", "capacity": 100, "price": 5000, "status": "active", "organizer": "665f2a..." } }
-```
-
-**Response `403`** (rol `user`):
-```json
-{ "status": "error", "message": "No tenés permisos para realizar esta acción" }
-```
-
-**Response `401`** (sin cookie):
-```json
-{ "status": "error", "message": "No autenticado" }
-```
-
-### `PUT /api/events/:eid`
-
-Modifica `name`, `date`, `place`, `capacity` y/o `price` (no se puede cambiar `organizer` ni `status` desde el body).
-
-**Request:**
-```json
-{ "price": 4000 }
-```
-
-**Response `200`:**
-```json
-{ "status": "success", "payload": { "id": "6690...", "name": "Congreso Tech 2026", "price": 4000, "status": "active", "organizer": "665f2a...", "...": "..." } }
-```
-
-**Response `403`** (organizer modificando un evento ajeno):
-```json
-{ "status": "error", "message": "Solo podés modificar tus propios eventos" }
-```
-
-### `DELETE /api/events/:eid`
-
-Cancela el evento (baja lógica: `status: "cancelled"`); deja de aparecer en `GET /api/events`.
-
-**Response `200`:**
-```json
-{ "status": "success", "message": "Evento cancelado", "payload": { "id": "6690...", "status": "cancelled", "...": "..." } }
-```
 
 ### `GET /api/users` (admin)
 
@@ -282,22 +230,183 @@ Cancela el evento (baja lógica: `status: "cancelled"`); deja de aparecer en `GE
 { "status": "success", "payload": [ { "id": "665f2a...", "first_name": "Ana", "last_name": "Pérez", "email": "ana@mail.com", "role": "user" } ] }
 ```
 
-**Response `403`** (organizer o user):
-```json
-{ "status": "error", "message": "No tenés permisos para realizar esta acción" }
-```
-
 ### `POST /api/tickets/:uid/:eid`
+
+Solo eventos con `status: "published"`.
 
 **Response `201`:**
 ```json
 { "status": "success", "payload": { "id": "6abf...", "user": "665f2a...", "event": "6690..." } }
 ```
 
-**Response `403`** (comprar en un evento propio):
+| Status | Caso |
+|--------|------|
+| 403 | Comprar en un evento propio (`No podés comprar un ticket de tu propio evento`) |
+| 409 | El evento no está publicado (`Solo se pueden comprar tickets de eventos publicados`) |
+
+---
+
+## Eventos
+
+### Modelo `Event`
+
+| Campo         | Tipo     | Reglas |
+|---------------|----------|--------|
+| `title`       | String   | Obligatorio |
+| `description` | String   | Obligatorio |
+| `category`    | String   | Obligatorio (se guarda en minúsculas, ej. `workshop`) |
+| `date`        | Date     | Obligatorio, no puede ser pasada |
+| `location`    | String   | Obligatorio |
+| `capacity`    | Number   | Entero **> 0** |
+| `price`       | Number   | **≥ 0** |
+| `status`      | String   | `draft` · `published` · `cancelled` · `finished` (default `draft`) |
+| `organizer`   | ObjectId | **Referencia** al `User` que lo creó (no se embebe). Se asigna desde `req.user`; nunca viene del body |
+
+Además tiene `createdAt` y `updatedAt` automáticos.
+
+### Endpoints
+
+| Método | Ruta                      | Acceso                     | Descripción |
+|--------|---------------------------|----------------------------|-------------|
+| POST   | `/api/events`             | `organizer`, `admin`       | Crea un evento (queda en `draft`) |
+| GET    | `/api/events`             | **Público**                | Lista con filtros, paginación y orden |
+| GET    | `/api/events/:id`         | **Público**                | Detalle de un evento (con el organizador populado) |
+| PUT    | `/api/events/:id`         | Dueño del evento o `admin` | Modifica datos del evento |
+| PATCH  | `/api/events/:id/status`  | Dueño del evento o `admin` | Cambia el estado (publicar, cancelar, finalizar) |
+
+> Los **borradores** (`draft`) no son públicos: solo los ven su organizador y los `admin` (con sesión iniciada). Para el resto, un borrador responde como inexistente (404).
+
+### Reglas de negocio
+
+Todas viven en **`src/services/events.service.js`** (no en rutas ni controllers):
+
+1. **No se permite fecha pasada** al crear ni al modificar la fecha → 400.
+2. **`capacity` ≤ 0 o `price` < 0** se rechazan → 400. `title`, `description`, `category` y `location` son obligatorios → 400.
+3. **`organizer` y `status` no se aceptan desde el body**: el organizador sale de `req.user` y el estado se cambia solo con `PATCH /status`.
+4. **Transiciones de estado permitidas** (cualquier otra → 409):
+
+   | Desde       | Puede pasar a              |
+   |-------------|----------------------------|
+   | `draft`     | `published`, `cancelled`   |
+   | `published` | `cancelled`, `finished`    |
+   | `cancelled` | — (estado final)           |
+   | `finished`  | — (estado final)           |
+
+   Por lo tanto **no se puede publicar un evento cancelado o finalizado**. Tampoco se puede publicar un borrador cuya fecha ya pasó → 400.
+5. **Un evento cancelado o finalizado no se puede modificar** (`PUT`) → 409. *Justificación de incluir `finished`: un evento que ya ocurrió no debería cambiar sus datos (fecha, precio, cupo), porque son el registro de lo que pasó y de lo que se vendió.*
+6. **Cancelar = cambiar `status` a `cancelled`**. Los eventos **nunca se eliminan físicamente** (no existe `DELETE`).
+7. **Propiedad**: un `organizer` solo puede modificar o cambiar el estado de sus eventos (403 si es ajeno); un `admin` puede cualquiera. Esto lo valida el middleware `eventOwnership`.
+
+### Listado: `GET /api/events`
+
+| Parámetro  | Ejemplo                  | Descripción |
+|------------|--------------------------|-------------|
+| `status`   | `published`              | Filtra por estado (`draft` solo devuelve los visibles para quien consulta) |
+| `category` | `workshop`               | Categoría exacta (no distingue mayúsculas) |
+| `location` | `caba`                   | Busca el texto dentro de la ubicación (no distingue mayúsculas) |
+| `dateFrom` | `2026-11-01`             | Desde esa fecha (inclusive) |
+| `dateTo`   | `2026-12-31`             | Hasta esa fecha (inclusive) |
+| `page`     | `2`                      | Página (default `1`) |
+| `limit`    | `5`                      | Resultados por página (default `10`, máximo `50`) |
+| `sort`     | `date` · `-date` · `price` · `-price` · `title` · `capacity` · `createdAt` | Orden (con `-` es descendente). Default `date` |
+
+Valores inválidos (estado inexistente, `page=0`, `sort` no permitido, `dateFrom` posterior a `dateTo`, fechas mal escritas) → 400.
+
+**Request:** `GET /api/events?status=published&category=workshop&page=2&limit=5`
+
+**Response `200`:**
 ```json
-{ "status": "error", "message": "No podés comprar un ticket de tu propio evento" }
+{
+  "status": "success",
+  "data": [
+    {
+      "id": "6690...",
+      "title": "Taller de Node",
+      "description": "Intro a Express",
+      "category": "workshop",
+      "date": "2027-01-06T00:00:00.000Z",
+      "location": "CABA",
+      "capacity": 30,
+      "price": 1000,
+      "status": "published",
+      "organizer": { "id": "665f2a...", "first_name": "Ana", "last_name": "Pérez", "email": "ana@mail.com" },
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "page": 2,
+  "limit": 5,
+  "total": 12,
+  "totalPages": 3
+}
 ```
+
+### `POST /api/events` (organizer / admin)
+
+**Request:**
+```json
+{ "title": "Taller de Node", "description": "Intro a Express", "category": "workshop", "date": "2027-03-10", "location": "CABA", "capacity": 30, "price": 1000 }
+```
+
+**Response `201`:**
+```json
+{ "status": "success", "payload": { "id": "6690...", "title": "Taller de Node", "category": "workshop", "status": "draft", "organizer": "665f2a...", "...": "..." } }
+```
+
+| Status | Caso | Mensaje |
+|--------|------|---------|
+| 401 | Sin sesión | `No autenticado` |
+| 403 | Rol `user` | `No tenés permisos para realizar esta acción` |
+| 400 | Fecha pasada | `La fecha del evento no puede ser pasada` |
+| 400 | `capacity: 0` | `La capacidad debe ser un número entero mayor a 0` |
+| 400 | `price: -1` | `El precio debe ser un número mayor o igual a 0` |
+| 400 | Falta un campo | `El campo "title" es obligatorio` |
+
+### `GET /api/events/:id` (público)
+
+**Response `200`:** `{ "status": "success", "payload": { ...evento con organizer populado } }`
+
+| Status | Caso |
+|--------|------|
+| 404 | El evento no existe (o es un borrador ajeno) → `Evento no encontrado` |
+| 400 | ID mal formado → `ID de evento inválido` |
+
+### `PUT /api/events/:id` (dueño o admin)
+
+Campos editables: `title`, `description`, `category`, `date`, `location`, `capacity`, `price`.
+
+**Request:**
+```json
+{ "price": 1500, "location": "Rosario" }
+```
+
+**Response `200`:** `{ "status": "success", "payload": { ...evento actualizado } }`
+
+| Status | Caso | Mensaje |
+|--------|------|---------|
+| 403 | Organizer modificando un evento ajeno | `Solo podés modificar tus propios eventos` |
+| 409 | Evento cancelado o finalizado | `No se puede modificar un evento cancelado` |
+| 400 | Body sin campos editables / datos inválidos | `No hay campos para actualizar...` |
+| 404 | No existe | `Evento no encontrado` |
+
+### `PATCH /api/events/:id/status` (dueño o admin)
+
+**Request:**
+```json
+{ "status": "published" }
+```
+
+**Response `200`:** `{ "status": "success", "payload": { ...evento con el nuevo status } }`
+
+| Status | Caso | Mensaje |
+|--------|------|---------|
+| 409 | Transición no permitida (ej. cancelado → publicado) | `No se puede pasar un evento de "cancelled" a "published"` |
+| 409 | Ya está en ese estado | `El evento ya está en estado "published"` |
+| 400 | Estado inexistente | `Estado inválido. Opciones: draft, published, cancelled, finished` |
+| 400 | Publicar con fecha pasada | `No se puede publicar un evento con fecha pasada` |
+| 403 | Evento ajeno (organizer) | `Solo podés modificar tus propios eventos` |
+
+Para **cancelar**: `{ "status": "cancelled" }`.
 
 ---
 
@@ -311,12 +420,21 @@ Cancela el evento (baja lógica: `status: "cancelled"`); deja de aparecer en `GE
 
 **Roles y autorización**
 
-4. `POST /api/events` con rol `user` → **403**
-5. `POST /api/events` con rol `organizer` → **201**
-6. `GET /api/users` con rol `organizer` → **403**
-7. `GET /api/users` con rol `admin` → **200**
-8. Cualquier ruta privada sin cookie → **401**
-9. `organizer` haciendo `PUT /api/events/:eid` sobre un evento ajeno → **403**
+4. `GET /api/users` con rol `organizer` → **403**
+5. `GET /api/users` con rol `admin` → **200**
+6. Cualquier ruta privada sin cookie → **401**
+
+**Eventos**
+
+7. Crear evento con rol `user` → **403**
+8. Crear evento con fecha pasada → **400**
+9. Crear evento con `capacity: 0` → **400**
+10. `organizer` modifica un evento propio → **200**
+11. `organizer` modifica un evento ajeno → **403**
+12. `admin` modifica un evento de otro organizador → **200**
+13. Cambiar el estado de un evento cancelado → **409**
+14. `GET /api/events?status=published&category=workshop&page=2&limit=5` → **200** con `data`, `page`, `limit`, `total`, `totalPages`
+15. Consultar un evento inexistente → **404**
 
 ---
 
@@ -334,20 +452,25 @@ src/
 │   └── roles.js                      # ROLES y matriz de PERMISSIONS
 ├── routes/
 │   ├── sessions.router.js            # rutas que delegan en Passport
-│   └── events.router.js              # aplica auth + authorize + eventOwnership
-├── controllers/sessions.controller.js  # genera el JWT y setea/borra la cookie
+│   └── events.router.js              # públicas + auth/authorize/eventOwnership
+├── controllers/                      # solo request/response
+│   ├── sessions.controller.js        # genera el JWT y setea/borra la cookie
+│   └── event.controller.js           # delega en events.service
+├── services/
+│   └── events.service.js             # reglas de negocio, filtros, paginación, transiciones
 ├── middlewares/
-│   ├── auth.middleware.js            # auth: valida JWT de la cookie → 401 si no hay sesión
+│   ├── auth.middleware.js            # auth (401 si no hay sesión) y optionalAuth (rutas públicas)
 │   ├── authorize.middleware.js       # authorize(...roles) → 403 si el rol no coincide
 │   ├── ownership.middleware.js       # eventOwnership / ticketPermission (propiedad del recurso)
 │   ├── passport.middleware.js        # passportCall: authenticate sin sesión + errores JSON
 │   └── error.middleware.js           # manejador global de errores
 ├── repositories/                     # users / events / tickets: deciden qué datos devolver
 ├── dao/                              # users / events / tickets: acceso directo a Mongoose
-├── models/                           # userModel, eventModel (con organizer), ticketModel
+├── models/                           # userModel, eventModel (organizer como referencia), ticketModel
 └── utils/
     ├── jwt.js                        # firma del JWT
-    └── hash.js                       # bcrypt
+    ├── hash.js                       # bcrypt
+    └── errors.js                     # HttpError (errores de negocio con status)
 ```
 
-Flujo: `router → passportCall(estrategia) → controller`, y las estrategias usan `repository → DAO → modelo`.
+Flujo: `router → middlewares (auth / authorize / ownership) → controller → service → repository → DAO → modelo`.

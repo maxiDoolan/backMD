@@ -3,7 +3,7 @@ import { notImplemented } from "./notImplemented.js";
 
 const ticketsRepository = new TicketsRepository();
 
-// ticketPermission (ownership.middleware) ya validó que el evento existe y que no es propio
+// ticketPermission ya validó que el evento existe, está publicado y no es propio
 export async function purchaseTicket(req, res, next) {
     try {
         const { uid, eid } = req.params;
