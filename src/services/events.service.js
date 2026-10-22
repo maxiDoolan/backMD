@@ -1,4 +1,5 @@
 import { EventRepository } from "../repositories/events.repository.js";
+import { TicketRepository } from "../repositories/tickets.repository.js";
 import { EVENT_STATUS } from "../constants/status.js";
 import { ROLES, PERMISSIONS } from "../config/roles.js";
 import { EventDTO } from "../dto/event.dto.js";
@@ -6,6 +7,7 @@ import { HttpError } from "../utils/errors.js";
 import { isValidId } from "../utils/validators.js";
 
 const eventRepository = new EventRepository();
+const ticketRepository = new TicketRepository();
 
 /* ------------------------------------------------------------------ */
 /*  Reglas de negocio                                                  */
@@ -32,7 +34,7 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 
 /* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
+/*  Helpersss                                                         */
 /* ------------------------------------------------------------------ */
 
 const isAdmin = (user) => user?.role === ROLES.ADMIN;
@@ -178,13 +180,15 @@ export async function listEvents(query = {}, user) {
     };
 }
 
-// GET /api/events/:id — los borradores ajenos se responden como inexistentes
+// GET /api/events/:id — incluye availableSeats. Los borradores ajenos se responden como inexistentes
 export async function getEvent(id, user) {
     const event = await findEventOrFail(id, { withOrganizer: true });
     if (event.status === EVENT_STATUS.DRAFT && !isAdmin(user) && !isOwner(event, user)) {
         throw new HttpError(404, "Evento no encontrado");
     }
-    return new EventDTO(event);
+    // Cupos libres: capacity menos los tickets activos (los cancelados no cuentan)
+    const reserved = await ticketRepository.countActiveTickets(event._id);
+    return { ...new EventDTO(event), availableSeats: Math.max(event.capacity - reserved, 0) };
 }
 
 // POST /api/events — el organizer sale del usuario logueado, nunca del body

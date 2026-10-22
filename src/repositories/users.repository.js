@@ -27,4 +27,8 @@ export class UserRepository {
     create(userData) {
         return this.dao.create(userData);
     }
+
+    update(id, changes) {
+        return this.dao.update(id, changes);
+    }
 }

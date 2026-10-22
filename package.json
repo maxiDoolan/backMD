@@ -1,14 +1,23 @@
 {
   "name": "backmd",
   "version": "1.0.0",
-  "description": "API REST para plataforma de eventos",
+  "description": "API REST para una plataforma de eventos e inscripciones (Node.js, Express, MongoDB, Passport, JWT, Nodemailer)",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "seed": "node scripts/seed.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "express",
+    "mongodb",
+    "mongoose",
+    "passport",
+    "jwt",
+    "nodemailer",
+    "api"
+  ],
+  "author": "Maxi Doolan",
   "license": "ISC",
   "type": "module",
   "dependencies": {
@@ -22,5 +31,8 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

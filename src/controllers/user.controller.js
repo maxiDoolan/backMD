@@ -1,5 +1,4 @@
 import * as usersService from "../services/users.service.js";
-import { notImplemented } from "./notImplemented.js";
 
 // Solo admin (lo controla authorize en el router)
 export async function getAll(req, res, next) {
@@ -10,6 +9,3 @@ export async function getAll(req, res, next) {
         next(error);
     }
 }
-
-export const getAllByEmail = notImplemented;
-export const updateEmail = notImplemented;
