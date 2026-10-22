@@ -1,6 +1,6 @@
 # BackMD — API REST para plataforma de eventos
 
-Backend con **Node.js, Express, MongoDB (Mongoose)**, autenticación centralizada con **Passport.js** (JWT en cookie HttpOnly), **autorización por roles** (`user`, `organizer`, `admin`) **CRUD de eventos** con reglas de negocio, filtros, paginación y ordenamiento, e **inscripciones (tickets)** con control de cupos y email de confirmación con **Nodemailer**.
+Backend con **Node.js, Express, MongoDB (Mongoose)** organizado en **capas (Router → Controller → Service → Repository → DAO, con DTOs)**, autenticación centralizada con **Passport.js** (JWT en cookie HttpOnly), **autorización por roles** (`user`, `organizer`, `admin`) **CRUD de eventos** con reglas de negocio, filtros, paginación y ordenamiento, e **inscripciones (tickets)** con control de cupos y email de confirmación con **Nodemailer**.
 
 ## Instalación
 
@@ -33,7 +33,7 @@ npm run dev            # o: npm start
 
 ## Autenticación con Passport.js
 
-Toda la autenticación pasa por estrategias de Passport definidas en **`src/config/passport.config.js`**. `app.js` solo ejecuta `initializePassport()` y `passport.initialize()`; no contiene lógica de estrategias. No se usan sesiones de Passport (`session: false`): el estado vive en el JWT.
+Toda la autenticación pasa por estrategias de Passport definidas en **`src/config/passport.config.js`**. Las estrategias no contienen reglas de negocio: **delegan en `src/services/sessions.service.js`** (validación, normalización, unicidad, bcrypt), siguiendo la arquitectura en capas. `app.js` solo ejecuta `initializePassport()` y `passport.initialize()`; no contiene lógica de estrategias. No se usan sesiones de Passport (`session: false`): el estado vive en el JWT.
 
 | Estrategia | Tipo                      | Usada en                      | Qué hace |
 |------------|---------------------------|-------------------------------|----------|
@@ -596,46 +596,116 @@ Response `201`:
 24. `GET /api/events/:eid/tickets` como `user` → **403**
 25. `GET /api/events/:eid/tickets` como `organizer` de otro evento → **403**
 
+**Arquitectura (DAO / Repository / DTO)**
+
+26. Flujo completo: registro → login → crear evento → inscribirse → mis tickets → cancelar
+27. `/api/sessions/current` no incluye `password`
+28. `GET /api/events/:eid/tickets` (con `populate` del usuario) no incluye `password`
+29. Un error de negocio (ej. inscripción duplicada) devuelve **409**, no 500
+30. Ruta protegida sin sesión → **401**; con sesión pero sin permisos → **403**
+31. Ruta inexistente → **404** en JSON
+
 ---
+
+## Arquitectura en capas
+
+La API está organizada en capas con una sola responsabilidad cada una. Un request recorre:
+
+```
+Request → Router → Middlewares → Controller → Service → Repository → DAO → Modelo (MongoDB)
+                                      ↑            │
+                                      └──── DTO ◄──┘   (la respuesta sale siempre por un DTO)
+```
+
+| Capa | Carpeta | Responsabilidad | Qué NO hace |
+|------|---------|-----------------|-------------|
+| **Router** | `src/routes/` | Define método + ruta y encadena middlewares y controller. | No tiene lógica. |
+| **Middlewares** | `src/middlewares/` | `auth` (401), `authorize(...roles)` (403), guardias de propiedad (`eventOwnership`, `ticketOwnership`, que consultan al service), `passportCall` y manejo centralizado de errores. | No acceden a la base de datos directamente. |
+| **Controller** | `src/controllers/` | Extrae `body`, `params`, `query` y `req.user`, llama al service y devuelve la respuesta con su código HTTP. | No importa modelos, no calcula cupos, no valida estados ni reglas de negocio. |
+| **Service** | `src/services/` | **Toda la lógica de negocio**: validaciones, cupos, estados y transiciones, duplicados, permisos sobre recursos propios, registro/login, envío de email. Devuelve DTOs. Lanza `HttpError` con el código correcto. | No importa DAOs ni modelos: solo repositories. |
+| **Repository** | `src/repositories/` | Métodos **orientados al dominio** sobre el DAO: `findByEmail`, `findByEmailWithPassword`, `findEvents`, `findPublishedEvents`, `updateStatus`, `countActiveTickets`, `findActiveByUserAndEvent`, `cancelTicket`... Decide qué datos de los documentos relacionados se populan. | No importa modelos. |
+| **DAO** | `src/dao/` | Acceso a datos genérico: `findById`, `findOne`, `find`, `create`, `update`, `count`, `sum`. `BaseDAO` implementa las operaciones y `UserDAO`, `EventDAO` y `TicketDAO` lo extienden. | **Son los únicos archivos que importan modelos de Mongoose.** Sin lógica de negocio. |
+| **Modelo** | `src/models/` | Schemas de Mongoose (`User`, `Event`, `Ticket`). | — |
+| **DTO** | `src/dto/` | Dan forma a cada respuesta y filtran datos sensibles, también en documentos populados. | — |
+
+### DTOs
+
+| DTO | Se usa en | Campos |
+|-----|-----------|--------|
+| `UserDTO` | Registro, `GET /api/users` | `id`, `first_name`, `last_name`, `email`, `role` |
+| `CurrentUserDTO` | `/api/sessions/current` y payload del JWT | `id`, `email`, `role` |
+| `PublicUserDTO` | Usuario populado (organizador de un evento, inscripto de un ticket) | `id`, `first_name`, `last_name`, `email` |
+| `EventDTO` | Respuestas de eventos | todos los campos del evento; `organizer` como id o `PublicUserDTO` si está populado |
+| `EventSummaryDTO` | Evento populado dentro de un ticket | `id`, `title`, `date`, `location`, `status` |
+| `TicketDTO` | Respuestas de tickets/inscripciones | `id`, `user`, `event`, `status`, `quantity`, `reservationCode`, `cancelledAt`, `createdAt`, `updatedAt` (en "mis tickets" se omite `user`) |
+
+**Ninguna respuesta expone `password`**, ni siquiera hasheada. Además, el campo tiene `select: false` en el modelo: solo se lee explícitamente (`findByEmailWithPassword`) para validar el login.
+
+### Manejo de errores
+
+Todos los errores tienen el mismo formato y los resuelve el middleware centralizado `src/middlewares/error.middleware.js`:
+
+```json
+{ "status": "error", "message": "Descripción del error" }
+```
+
+| Código | Cuándo |
+|--------|--------|
+| **400** | Datos inválidos (campos faltantes, fecha pasada, `quantity` inválida, ID mal formado, JSON roto) |
+| **401** | No autenticado (sin cookie, token inválido o expirado, credenciales incorrectas) |
+| **403** | Autenticado pero sin permisos (rol no permitido o recurso ajeno) |
+| **404** | Recurso o ruta inexistente |
+| **409** | Conflicto con el estado actual (email duplicado, inscripción duplicada, sin cupo, transición de estado no permitida, evento cancelado) |
+| **500** | Error interno inesperado (se registra en consola y no se exponen detalles) |
+
+Los services lanzan `HttpError(status, message)` (`src/utils/errors.js`) y el middleware lo traduce. Los errores de negocio nunca terminan en 500.
 
 ## Estructura
 
 ```
 src/
-├── app.js                            # Express + passport.initialize() (sin lógica de auth)
+├── app.js                            # Express + passport.initialize() + middlewares de error
 ├── server.js                         # conecta a MongoDB y levanta el servidor
 ├── config/
 │   ├── env.js                        # lee y valida variables de entorno
 │   ├── db.js                         # conexión a MongoDB
 │   ├── cookie.js                     # nombre y opciones de la cookie de auth
-│   ├── passport.config.js            # estrategias register, login y current
+│   ├── passport.config.js            # estrategias register, login y current (delegan en sessions.service)
 │   ├── mailer.js                     # transporter de Nodemailer (credenciales desde .env)
 │   └── roles.js                      # ROLES y matriz de PERMISSIONS
-├── routes/
-│   ├── sessions.router.js            # rutas que delegan en Passport
-│   ├── events.router.js              # eventos + inscripciones (/:eid/tickets)
-│   └── ticket.router.js              # my-tickets y cancelación
-├── controllers/                      # solo request/response
-│   ├── sessions.controller.js        # genera el JWT y setea/borra la cookie
-│   ├── event.controller.js           # delega en events.service
-│   └── ticket.controller.js          # delega en tickets.service
-├── services/
-│   ├── events.service.js             # reglas de negocio, filtros, paginación, transiciones
-│   ├── tickets.service.js            # inscripción, cupos, duplicados, cancelación
-│   └── mail.service.js               # email de confirmación
+├── constants/
+│   └── status.js                     # EVENT_STATUS, TICKET_STATUS, ACTIVE_TICKET_STATUSES
+├── routes/                           # sessions, events (+ /:eid/tickets), tickets, users, root
 ├── middlewares/
-│   ├── auth.middleware.js            # auth (401 si no hay sesión) y optionalAuth (rutas públicas)
-│   ├── authorize.middleware.js       # authorize(...roles) → 403 si el rol no coincide
-│   ├── ownership.middleware.js       # eventOwnership / ticketOwnership (propiedad del recurso)
+│   ├── auth.middleware.js            # auth (401) y optionalAuth (rutas públicas)
+│   ├── authorize.middleware.js       # authorize(...roles) → 403
+│   ├── ownership.middleware.js       # eventOwnership / ticketOwnership → consultan al service
 │   ├── passport.middleware.js        # passportCall: authenticate sin sesión + errores JSON
-│   └── error.middleware.js           # manejador global de errores
-├── repositories/                     # users / events / tickets: deciden qué datos devolver
-├── dao/                              # users / events / tickets: acceso directo a Mongoose
-├── models/                           # userModel, eventModel, ticketModel (solo referencias)
+│   └── error.middleware.js           # notFoundHandler (404) + errorHandler centralizado
+├── controllers/                      # sessions, event, ticket, user, root: solo request/response
+├── services/
+│   ├── sessions.service.js           # registro y validación de credenciales
+│   ├── users.service.js              # listado de usuarios
+│   ├── events.service.js             # reglas de eventos, filtros, paginación, transiciones, propiedad
+│   ├── tickets.service.js            # inscripción, cupos, duplicados, cancelación, propiedad
+│   └── mail.service.js               # email de confirmación
+├── repositories/
+│   ├── users.repository.js           # UserRepository
+│   ├── events.repository.js          # EventRepository
+│   └── tickets.repository.js         # TicketRepository
+├── dao/
+│   ├── base.dao.js                   # BaseDAO: findById, findOne, find, create, update, count, sum
+│   ├── users.dao.js                  # UserDAO
+│   ├── events.dao.js                 # EventDAO
+│   └── tickets.dao.js                # TicketDAO
+├── dto/
+│   ├── user.dto.js                   # UserDTO, CurrentUserDTO, PublicUserDTO
+│   ├── event.dto.js                  # EventDTO, EventSummaryDTO
+│   └── ticket.dto.js                 # TicketDTO
+├── models/                           # userModel, eventModel, ticketModel
 └── utils/
     ├── jwt.js                        # firma del JWT
     ├── hash.js                       # bcrypt
-    └── errors.js                     # HttpError (errores de negocio con status)
+    ├── errors.js                     # HttpError
+    └── validators.js                 # isValidId, isNonEmptyString
 ```
-
-Flujo: `router → middlewares (auth / authorize / ownership) → controller → service → repository → DAO → modelo`.

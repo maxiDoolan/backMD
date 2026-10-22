@@ -1,14 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { isValidObjectId } from "mongoose";
-import { TicketsRepository } from "../repositories/tickets.repository.js";
-import { EventsRepository } from "../repositories/events.repository.js";
-import { TICKET_STATUS } from "../models/ticketModel.js";
-import { EVENT_STATUS } from "../models/eventModel.js";
+import { TicketRepository } from "../repositories/tickets.repository.js";
+import { EventRepository } from "../repositories/events.repository.js";
+import { TICKET_STATUS, EVENT_STATUS } from "../constants/status.js";
+import { PERMISSIONS } from "../config/roles.js";
+import { TicketDTO } from "../dto/ticket.dto.js";
+import { EventDTO } from "../dto/event.dto.js";
 import { HttpError } from "../utils/errors.js";
+import { isValidId } from "../utils/validators.js";
 import { sendTicketConfirmation } from "./mail.service.js";
 
-const ticketsRepository = new TicketsRepository();
-const eventsRepository = new EventsRepository();
+const ticketRepository = new TicketRepository();
+const eventRepository = new EventRepository();
 
 // Regla del proyecto: una inscripción activa por usuario y evento
 // (dentro de esa inscripción se pueden pedir varias entradas con quantity).
@@ -29,15 +31,15 @@ function parseQuantity(value) {
 }
 
 async function findEventOrFail(eventId) {
-    if (!isValidObjectId(eventId)) throw new HttpError(400, "ID de evento inválido");
-    const event = await eventsRepository.findById(eventId);
+    if (!isValidId(eventId)) throw new HttpError(400, "ID de evento inválido");
+    const event = await eventRepository.findById(eventId);
     if (!event) throw new HttpError(404, "Evento no encontrado");
     return event;
 }
 
 // Cupos del evento: solo cuentan los tickets activos (confirmed / pending)
 async function getAvailability(event) {
-    const reserved = await ticketsRepository.sumActiveQuantity(event.id);
+    const reserved = await ticketRepository.countActiveTickets(event._id);
     return { capacity: event.capacity, reserved, available: Math.max(event.capacity - reserved, 0) };
 }
 
@@ -62,7 +64,7 @@ export async function enroll(eventId, body = {}, user) {
     }
 
     // 4. Sin inscripción activa duplicada
-    const existing = await ticketsRepository.findActiveByUserAndEvent(user.id, event.id);
+    const existing = await ticketRepository.findActiveByUserAndEvent(user.id, event._id);
     if (existing) {
         throw new HttpError(409, `Ya tenés una inscripción activa para este evento (código ${existing.reservationCode})`);
     }
@@ -78,27 +80,27 @@ export async function enroll(eventId, body = {}, user) {
         );
     }
 
-    const ticket = await ticketsRepository.create({
+    const ticket = await ticketRepository.create({
         user: user.id,
-        event: event.id,
+        event: event._id,
         quantity,
         status: TICKET_STATUS.CONFIRMED,
         reservationCode: generateReservationCode(),
     });
 
     // 6. Email de confirmación (si falla, la inscripción igual queda guardada)
-    const emailSent = await sendTicketConfirmation({ to: user.email, ticket, event });
+    const emailSent = await sendTicketConfirmation({ to: user.email, ticket, event: new EventDTO(event) });
 
-    return { ticket, emailSent };
+    return { ticket: new TicketDTO(ticket), emailSent };
 }
 
 /* ------------------------------------------------------------------ */
 /*  GET /api/tickets/my-tickets                                         */
 /* ------------------------------------------------------------------ */
 export async function getMyTickets(user) {
-    const tickets = await ticketsRepository.findByUser(user.id);
-    // Solo datos del propio usuario: se omite la referencia al user
-    return tickets.map(({ user: _omit, ...ticket }) => ticket);
+    const tickets = await ticketRepository.findByUser(user.id);
+    // Son del propio usuario: se omite el campo user; el evento va resumido por el DTO
+    return tickets.map((ticket) => new TicketDTO(ticket, { includeUser: false }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,29 +109,42 @@ export async function getMyTickets(user) {
 export async function getEventTickets(eventId) {
     const event = await findEventOrFail(eventId);
     const [tickets, availability] = await Promise.all([
-        ticketsRepository.findByEvent(event.id),
+        ticketRepository.findByEvent(event._id),
         getAvailability(event),
     ]);
     return {
-        event: { id: event.id, title: event.title, status: event.status, ...availability },
-        tickets,
+        event: { id: String(event._id), title: event.title, status: event.status, ...availability },
+        tickets: tickets.map((ticket) => new TicketDTO(ticket)),
     };
 }
 
 /* ------------------------------------------------------------------ */
 /*  PATCH /api/tickets/:tid/cancel                                     */
-/*  (que sea el dueño del ticket o un admin lo valida ticketOwnership)  */
+/*  (que sea el dueño del ticket o un admin lo valida assertCanCancelTicket) */
 /* ------------------------------------------------------------------ */
-export async function cancelTicket(ticketId) {
-    if (!isValidObjectId(ticketId)) throw new HttpError(400, "ID de ticket inválido");
-    const ticket = await ticketsRepository.findById(ticketId);
+async function findTicketOrFail(ticketId) {
+    if (!isValidId(ticketId)) throw new HttpError(400, "ID de ticket inválido");
+    const ticket = await ticketRepository.findById(ticketId);
     if (!ticket) throw new HttpError(404, "Ticket no encontrado");
+    return ticket;
+}
+
+export async function cancelTicket(ticketId) {
+    const ticket = await findTicketOrFail(ticketId);
     if (ticket.status === TICKET_STATUS.CANCELLED) throw new HttpError(409, "El ticket ya está cancelado");
 
     // No se elimina: cambia el estado y registra la fecha. El cupo se libera
-    // solo, porque los tickets cancelados no se cuentan en getAvailability.
-    return ticketsRepository.update(ticketId, {
-        status: TICKET_STATUS.CANCELLED,
-        cancelledAt: new Date(),
-    });
+    // solo, porque los tickets cancelados no se cuentan en countActiveTickets.
+    return new TicketDTO(await ticketRepository.cancelTicket(ticketId));
+}
+
+// Permiso sobre recurso propio: el dueño del ticket o un admin.
+// Lo usa el middleware ticketOwnership antes de cancelar.
+export async function assertCanCancelTicket(ticketId, user) {
+    const ticket = await findTicketOrFail(ticketId);
+    const canManageAny = PERMISSIONS.CANCEL_ANY_TICKET.includes(user?.role);
+    if (!canManageAny && String(ticket.user) !== String(user?.id)) {
+        throw new HttpError(403, "Solo podés cancelar tus propios tickets");
+    }
+    return ticket;
 }

@@ -1,8 +1,3 @@
-export async function healtstatus(req, res, next) {
-  try {
-    res.status(200).json({ status: 'ok', message: 'Servidor activo' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+export function healtstatus(req, res) {
+    res.status(200).json({ status: "ok", message: "Servidor activo" });
 }

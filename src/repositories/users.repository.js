@@ -1,23 +1,30 @@
-import { UsersDAO } from "../dao/users.dao.js";
+import { UserDAO } from "../dao/users.dao.js";
 
-const dao = new UsersDAO();
-
-// Repository: abstrae el DAO y decide qué datos devolver hacia arriba
-export class UsersRepository {
-    async findAll() {
-        const users = await dao.findAll(); // ya vienen sin password
-        return users.map(({ _id, ...user }) => ({ id: _id, ...user }));
+// Repository de usuarios: métodos orientados al dominio sobre el UserDAO.
+// No importa modelos. Devuelve objetos planos; los DTO se aplican en los services.
+export class UserRepository {
+    constructor(dao = new UserDAO()) {
+        this.dao = dao;
     }
 
-    // Uso interno (login/registro): devuelve el documento completo
-    async findByEmail(email) {
-        return dao.findByEmail(email);
+    findAll() {
+        return this.dao.find({});
     }
 
-    async create(userData) {
-        const created = await dao.create(userData);
-        // Sacamos password, __v y _id para no exponerlos ni duplicarlos
-        const { password, __v, _id, ...safeUser } = created.toObject();
-        return { id: _id, ...safeUser };
+    findById(id) {
+        return this.dao.findById(id);
+    }
+
+    findByEmail(email) {
+        return this.dao.findOne({ email });
+    }
+
+    // Solo para validar credenciales: incluye el hash de la contraseña
+    findByEmailWithPassword(email) {
+        return this.dao.findOne({ email }, { select: "+password" });
+    }
+
+    create(userData) {
+        return this.dao.create(userData);
     }
 }

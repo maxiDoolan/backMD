@@ -1,13 +1,5 @@
 import { Schema, model } from "mongoose";
-
-export const TICKET_STATUS = Object.freeze({
-    CONFIRMED: "confirmed", // inscripción confirmada (ocupa cupo)
-    PENDING: "pending",     // reservada a confirmar, ej. pago pendiente (ocupa cupo)
-    CANCELLED: "cancelled", // cancelada (NO ocupa cupo)
-});
-
-// Estados que ocupan cupo y cuentan como "inscripción activa"
-export const ACTIVE_TICKET_STATUSES = [TICKET_STATUS.CONFIRMED, TICKET_STATUS.PENDING];
+import { TICKET_STATUS } from "../constants/status.js";
 
 const ticketSchema = new Schema(
     {

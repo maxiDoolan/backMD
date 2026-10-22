@@ -1,10 +1,11 @@
-import { isValidObjectId } from "mongoose";
-import { EventsRepository } from "../repositories/events.repository.js";
-import { EVENT_STATUS } from "../models/eventModel.js";
-import { ROLES } from "../config/roles.js";
+import { EventRepository } from "../repositories/events.repository.js";
+import { EVENT_STATUS } from "../constants/status.js";
+import { ROLES, PERMISSIONS } from "../config/roles.js";
+import { EventDTO } from "../dto/event.dto.js";
 import { HttpError } from "../utils/errors.js";
+import { isValidId } from "../utils/validators.js";
 
-const eventsRepository = new EventsRepository();
+const eventRepository = new EventRepository();
 
 /* ------------------------------------------------------------------ */
 /*  Reglas de negocio                                                  */
@@ -35,7 +36,7 @@ const MAX_LIMIT = 50;
 /* ------------------------------------------------------------------ */
 
 const isAdmin = (user) => user?.role === ROLES.ADMIN;
-const organizerId = (event) => String(event.organizer?.id ?? event.organizer);
+const organizerId = (event) => String(event.organizer?._id ?? event.organizer);
 const isOwner = (event, user) => Boolean(user) && organizerId(event) === String(user.id);
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -118,12 +119,14 @@ function parseSort(sort = "date") {
 }
 
 function assertValidId(id) {
-    if (!isValidObjectId(id)) throw new HttpError(400, "ID de evento inválido");
+    if (!isValidId(id)) throw new HttpError(400, "ID de evento inválido");
 }
 
-async function findEventOrFail(id, options) {
+async function findEventOrFail(id, { withOrganizer = false } = {}) {
     assertValidId(id);
-    const event = await eventsRepository.findById(id, options);
+    const event = withOrganizer
+        ? await eventRepository.findByIdWithOrganizer(id)
+        : await eventRepository.findById(id);
     if (!event) throw new HttpError(404, "Evento no encontrado");
     return event;
 }
@@ -160,32 +163,39 @@ export async function listEvents(query = {}, user) {
     const limit = Math.min(parsePositiveInt(query.limit, "limit", DEFAULT_LIMIT), MAX_LIMIT);
     const filter = { $and: filters };
 
-    const { events, total } = await eventsRepository.findPaginated(filter, {
+    const { events, total } = await eventRepository.findEvents(filter, {
         sort: parseSort(sort),
         skip: (page - 1) * limit,
         limit,
     });
 
-    return { data: events, page, limit, total, totalPages: Math.ceil(total / limit) };
+    return {
+        data: events.map((event) => new EventDTO(event)),
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+    };
 }
 
 // GET /api/events/:id — los borradores ajenos se responden como inexistentes
 export async function getEvent(id, user) {
-    const event = await findEventOrFail(id, { populate: true });
+    const event = await findEventOrFail(id, { withOrganizer: true });
     if (event.status === EVENT_STATUS.DRAFT && !isAdmin(user) && !isOwner(event, user)) {
         throw new HttpError(404, "Evento no encontrado");
     }
-    return event;
+    return new EventDTO(event);
 }
 
 // POST /api/events — el organizer sale del usuario logueado, nunca del body
 export async function createEvent(body, user) {
     const data = validateEventData(pickEditable(body));
-    return eventsRepository.create({ ...data, organizer: user.id });
+    const event = await eventRepository.create({ ...data, organizer: user.id });
+    return new EventDTO(event);
 }
 
 // PUT /api/events/:id — no se puede modificar un evento cancelado o finalizado.
-// (Que sea el dueño o un admin ya lo validó eventOwnership en la ruta.)
+// (Que sea el dueño o un admin lo valida assertCanManageEvent, vía eventOwnership.)
 export async function updateEvent(id, body) {
     const event = await findEventOrFail(id);
     if (LOCKED_STATUSES.includes(event.status)) {
@@ -197,11 +207,11 @@ export async function updateEvent(id, body) {
         throw new HttpError(400, `No hay campos para actualizar. Campos editables: ${EDITABLE_FIELDS.join(", ")}`);
     }
     validateEventData(changes, { partial: true });
-    return eventsRepository.update(id, changes);
+    return new EventDTO(await eventRepository.update(id, changes));
 }
 
 // PATCH /api/events/:id/status — publicar, cancelar o finalizar según las transiciones.
-// (Que sea el dueño o un admin ya lo validó eventOwnership en la ruta.)
+// (Que sea el dueño o un admin lo valida assertCanManageEvent, vía eventOwnership.)
 export async function changeEventStatus(id, newStatus) {
     const event = await findEventOrFail(id);
     if (!Object.values(EVENT_STATUS).includes(newStatus)) {
@@ -216,5 +226,16 @@ export async function changeEventStatus(id, newStatus) {
     if (newStatus === EVENT_STATUS.PUBLISHED && new Date(event.date) <= new Date()) {
         throw new HttpError(400, "No se puede publicar un evento con fecha pasada");
     }
-    return eventsRepository.update(id, { status: newStatus });
+    return new EventDTO(await eventRepository.updateStatus(id, newStatus));
+}
+
+// Permiso sobre recurso propio: admin gestiona cualquier evento; organizer solo los suyos.
+// Lo usa el middleware eventOwnership antes de editar, cambiar estado o ver inscriptos.
+export async function assertCanManageEvent(id, user) {
+    const event = await findEventOrFail(id);
+    const canManageAny = PERMISSIONS.MANAGE_ANY_EVENT.includes(user?.role);
+    if (!canManageAny && !isOwner(event, user)) {
+        throw new HttpError(403, "Solo podés gestionar tus propios eventos");
+    }
+    return event;
 }

@@ -1,49 +1,43 @@
-import { TicketsDAO } from "../dao/tickets.dao.js";
+import { TicketDAO } from "../dao/tickets.dao.js";
+import { ACTIVE_TICKET_STATUSES, TICKET_STATUS } from "../constants/status.js";
 
-const dao = new TicketsDAO();
+// Datos que se piden de los documentos relacionados (nunca password)
+const WITH_EVENT = { path: "event", select: "title date location status" };
+const WITH_USER = { path: "user", select: "first_name last_name email" };
 
-// Convierte _id → id, también en los documentos populados
-function withId(doc) {
-    if (!doc || typeof doc !== "object" || !doc._id) return doc;
-    const { _id, __v, ...rest } = doc;
-    return { id: _id, ...rest };
-}
-
-const toDTO = (ticket) => {
-    const { user, event, ...rest } = withId(ticket);
-    return { ...rest, user: withId(user), event: withId(event) };
-};
-
-export class TicketsRepository {
-    async create(ticketData) {
-        const created = await dao.create(ticketData);
-        return toDTO(created.toObject());
+// Repository de tickets: métodos orientados al dominio sobre el TicketDAO.
+export class TicketRepository {
+    constructor(dao = new TicketDAO()) {
+        this.dao = dao;
     }
 
-    async findById(id) {
-        const ticket = await dao.findById(id);
-        return ticket ? toDTO(ticket) : null;
+    findById(id) {
+        return this.dao.findById(id);
     }
 
-    async findActiveByUserAndEvent(userId, eventId) {
-        const ticket = await dao.findActiveByUserAndEvent(userId, eventId);
-        return ticket ? toDTO(ticket) : null;
+    findActiveByUserAndEvent(userId, eventId) {
+        return this.dao.findOne({ user: userId, event: eventId, status: { $in: ACTIVE_TICKET_STATUSES } });
     }
 
-    async sumActiveQuantity(eventId) {
-        return dao.sumActiveQuantity(eventId);
+    // Cupos ocupados: suma de quantity de los tickets activos (los cancelados no cuentan)
+    countActiveTickets(eventId) {
+        return this.dao.sum({ event: eventId, status: { $in: ACTIVE_TICKET_STATUSES } }, "quantity");
     }
 
-    async findByUser(userId) {
-        return (await dao.findByUser(userId)).map(toDTO);
+    findByUser(userId) {
+        return this.dao.find({ user: userId }, { sort: { createdAt: -1 }, populate: WITH_EVENT });
     }
 
-    async findByEvent(eventId) {
-        return (await dao.findByEvent(eventId)).map(toDTO);
+    findByEvent(eventId) {
+        return this.dao.find({ event: eventId }, { sort: { createdAt: 1 }, populate: WITH_USER });
     }
 
-    async update(id, changes) {
-        const ticket = await dao.update(id, changes);
-        return ticket ? toDTO(ticket) : null;
+    create(ticketData) {
+        return this.dao.create(ticketData);
+    }
+
+    // Cancelar = cambiar estado y registrar la fecha (nunca se elimina)
+    cancelTicket(id) {
+        return this.dao.update(id, { status: TICKET_STATUS.CANCELLED, cancelledAt: new Date() });
     }
 }

@@ -1,12 +1,10 @@
-import { UsersRepository } from "../repositories/users.repository.js";
+import * as usersService from "../services/users.service.js";
 import { notImplemented } from "./notImplemented.js";
-
-const usersRepository = new UsersRepository();
 
 // Solo admin (lo controla authorize en el router)
 export async function getAll(req, res, next) {
     try {
-        const users = await usersRepository.findAll();
+        const users = await usersService.listUsers();
         res.status(200).json({ status: "success", payload: users });
     } catch (error) {
         next(error);

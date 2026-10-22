@@ -1,11 +1,5 @@
 import { Schema, model } from "mongoose";
-
-export const EVENT_STATUS = Object.freeze({
-    DRAFT: "draft",         // borrador: solo lo ven su organizador y los admin
-    PUBLISHED: "published", // visible para todos
-    CANCELLED: "cancelled", // cancelado (no se borra físicamente)
-    FINISHED: "finished",   // ya ocurrió
-});
+import { EVENT_STATUS } from "../constants/status.js";
 
 const eventSchema = new Schema(
     {
